@@ -1,41 +1,58 @@
 <div class="h-screen flex flex-col">
-  <form>
-    <mat-form-field class="w-full">
-      <input
-        matInput
-        placeholder="Enter a book title"
-        [value]="$search.searchText"
-        (input)="onSearchInputChange($event)"
-      />
-      <button mat-icon-button matSuffix (click)="$search.submit()">
-        <mat-icon>search</mat-icon>
-      </button>
-    </mat-form-field>
-  </form>
-  <mat-list role="list" class="flex-grow min-h-0 overflow-y-auto">
-    @for (result of (searchResults$ | async)?.docs; track result.title) {
-    <mat-list-item role="listitem">
-      <img
-        matListItemAvatar
-        [src]="
-          'https://covers.openlibrary.org/b/olid/' +
-          result.cover_edition_key +
-          '-M.jpg'
-        "
-      />
-      <div matListItemTitle>{{ result.title }}</div>
-      <div matListItemLine>{{ result.author_name.join(", ") }}</div>
-    </mat-list-item>
-    }
-  </mat-list>
-  @if ((searchResults$ | async)?.num_found) {
-  <mat-paginator
-    class="border-0 border-t border-black border-solid"
-    [length]="(searchResults$ | async)?.num_found ?? 0"
-    [pageIndex]="$search.page - 1"
-    [pageSize]="$search.pageSize"
-    (page)="$search.page = $event.pageIndex + 1"
-    aria-label="Select page"
-  />
-  }
+    <form [formGroup]="searchForm" (ngSubmit)="submitSearch()">
+        <mat-form-field class="w-full">
+            <input matInput placeholder="Enter a book title" formControlName="searchText" />
+            <button mat-icon-button matSuffix type="submit">
+                <mat-icon>search</mat-icon>
+            </button>
+        </mat-form-field>
+    </form>
+
+    <!-- Loading indicator -->
+    <div *ngIf="loading$ | async" class="flex justify-center my-4">
+        <mat-spinner diameter="40"></mat-spinner>
+    </div>
+
+    <!-- Error message -->
+    <div *ngIf="error$ | async as error" class="text-red-600 text-center my-4">
+        {{ error }}
+    </div>
+
+    <!-- Search results -->
+    <mat-list role="list" class="flex-grow min-h-0 overflow-y-auto">
+        <ng-container *ngIf="searchResults$ | async as results">
+            <mat-list-item
+                *ngFor="let result of results.docs; trackBy: trackByTitle"
+                role="listitem"
+            >
+                <img
+                    matListItemAvatar
+                    [src]="
+                        'https://covers.openlibrary.org/b/olid/' +
+                        result.cover_edition_key +
+                        '-M.jpg'
+                    "
+                    onerror="this.src='https://openlibrary.org/images/icons/avatar_book.png'"
+                />
+                <div matListItemTitle>{{ result.title }}</div>
+                <div matListItemLine>{{ safeAuthorJoin(result.author_name) }}</div>
+            </mat-list-item>
+
+            <div *ngIf="results.docs && results.docs.length === 0" class="text-center my-4">
+                No results found
+            </div>
+        </ng-container>
+    </mat-list>
+
+    <!-- Pagination -->
+    <mat-paginator
+        *ngIf="(searchResults$ | async)?.num_found"
+        class="border-0 border-t border-black border-solid"
+        [length]="(searchResults$ | async)?.num_found ?? 0"
+        [pageIndex]="currentPage - 1"
+        [pageSize]="currentPageSize"
+        [pageSizeOptions]="[5, 10, 25, 50]"
+        (page)="handlePageEvent($event)"
+        aria-label="Select page"
+    />
 </div>
