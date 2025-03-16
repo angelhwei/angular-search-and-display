@@ -1,89 +1,145 @@
-import { CommonModule } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
-import { Component, inject } from '@angular/core';
-import { FormsModule } from '@angular/forms';
-import { MatButtonModule } from '@angular/material/button';
-import { MatFormFieldModule } from '@angular/material/form-field';
-import { MatIconModule } from '@angular/material/icon';
-import { MatInputModule } from '@angular/material/input';
-import { MatListModule } from '@angular/material/list';
-import { MatPaginatorModule } from '@angular/material/paginator';
-import { BehaviorSubject, map, Observable } from 'rxjs';
-import { CurrentSearch } from './services/search.service';
+import { CommonModule } from '@angular/common'
+import { HttpClient } from '@angular/common/http'
+import { Component, inject, OnInit } from '@angular/core'
+import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms'
+import { MatButtonModule } from '@angular/material/button'
+import { MatFormFieldModule } from '@angular/material/form-field'
+import { MatIconModule } from '@angular/material/icon'
+import { MatInputModule } from '@angular/material/input'
+import { MatListModule } from '@angular/material/list'
+import { MatPaginatorModule, PageEvent } from '@angular/material/paginator'
+import { MatProgressSpinnerModule } from '@angular/material/progress-spinner'
+import {
+    Observable,
+    of,
+    catchError,
+    debounceTime,
+    distinctUntilChanged,
+    map,
+    switchMap,
+    tap,
+    BehaviorSubject,
+} from 'rxjs'
+import { CurrentSearch, SearchService } from './services/search.service'
 
 interface SearchResult {
-  num_found: number;
-  docs: {
-    title: string;
-    author_name: string[];
-    cover_edition_key: string;
-  }[];
+    num_found: number
+    docs: {
+        title: string
+        author_name: string[]
+        cover_edition_key: string
+    }[]
 }
 
 @Component({
-  selector: 'app-root',
-  templateUrl: './app.component.html',
-  styleUrl: './app.component.css',
-  imports: [
-    CommonModule,
-    FormsModule,
-    MatFormFieldModule,
-    MatInputModule,
-    MatIconModule,
-    MatButtonModule,
-    MatListModule,
-    MatPaginatorModule,
-  ],
-  // BONUS: Use DI to update the config of SearchService to update page size
+    selector: 'app-root',
+    standalone: true,
+    templateUrl: './app.component.html',
+    styleUrl: './app.component.css',
+    imports: [
+        CommonModule,
+        ReactiveFormsModule,
+        MatFormFieldModule,
+        MatInputModule,
+        MatIconModule,
+        MatButtonModule,
+        MatListModule,
+        MatPaginatorModule,
+        MatProgressSpinnerModule,
+    ],
 })
-export class AppComponent {
-  private $http = inject(HttpClient);
+export class AppComponent implements OnInit {
+    private http = inject(HttpClient)
 
-  // TODO: Create a SearchService and use DI to inject it
-  // Check app/services/search.service.ts for the implementation
-  $search = {
-    searchText: 'lord of the rings',
-    pageSize: 10,
-    page: 1,
-    currentSearch$: new BehaviorSubject<CurrentSearch>({
-      searchText: '',
-      pageSize: 10,
-      page: 1,
-    }),
-    submit: () => {},
-  };
+    // Make searchService public so it can be accessed from the template
+    public searchService = inject(SearchService)
 
-  // TODO: Implement this observable to call the searchBooks() function
-  // Hint: Use RxJS operators to solve these issues
-  searchResults$ = this.$search.currentSearch$.pipe(
-    map(() => ({
-      num_found: 2,
-      docs: [
-        {
-          title: 'The Lord of the Rings',
-          author_name: ['J.R.R. Tolkien'],
-          cover_edition_key: 'OL27702422M',
-        },
-        {
-          title: 'The Hobbit',
-          author_name: ['J.R.R. Tolkien'],
-          cover_edition_key: 'OL27702423M',
-        },
-      ],
-    }))
-  );
+    // Form control
+    searchForm = new FormGroup({
+        searchText: new FormControl(''),
+    })
 
-  onSearchInputChange(event: Event) {
-    this.$search.searchText = (event.target as HTMLInputElement).value;
-  }
+    // Loading state
+    loading$ = new BehaviorSubject<boolean>(false)
 
-  searchBooks(currentSearch: CurrentSearch): Observable<SearchResult> {
-    const { searchText, pageSize, page } = currentSearch;
+    // Error state
+    error$ = new BehaviorSubject<string | null>(null)
 
-    const searchQuery = searchText.split(' ').join('+').toLowerCase();
+    // Current page and page size
+    currentPage = 1
+    currentPageSize = 10
 
-    return this.$http.get<SearchResult>(
-      `https://openlibrary.org/search.json?q=${searchQuery}&page=${page}&limit=${pageSize}`
-    );
-  }
+    // Search results
+    searchResults$: Observable<SearchResult | null> = this.searchService.currentSearch$.pipe(
+        tap(() => {
+            this.loading$.next(true)
+            this.error$.next(null)
+        }),
+        switchMap(currentSearch => {
+            // Update local variables for use in template
+            this.currentPage = currentSearch.page
+            this.currentPageSize = currentSearch.pageSize
+            return this.searchBooks(currentSearch)
+        }),
+        tap(() => this.loading$.next(false)),
+        catchError(error => {
+            this.loading$.next(false)
+            this.error$.next('An error occurred while searching. Please try again.')
+            console.error('Search error:', error)
+            return of(null)
+        })
+    )
+
+    ngOnInit() {
+        // Subscribe to search text changes and update form value without emitting event
+        this.searchService.searchText$.subscribe(text => {
+            this.searchForm.get('searchText')?.setValue(text, { emitEvent: false })
+        })
+
+        // Listen for form changes with debounce
+        this.searchForm
+            .get('searchText')
+            ?.valueChanges.pipe(debounceTime(300), distinctUntilChanged())
+            .subscribe(value => {
+                this.searchService.updateSearchText(value || '')
+            })
+    }
+
+    // Submit search
+    submitSearch() {
+        this.searchService.submitSearch()
+    }
+
+    // Handle pagination event
+    handlePageEvent(event: PageEvent) {
+        const newSize = event.pageSize
+        const newPage = event.pageIndex + 1
+
+        if (newSize !== this.currentPageSize) {
+            this.searchService.updatePageSize(newSize)
+        } else if (newPage !== this.currentPage) {
+            this.searchService.updatePage(newPage)
+        }
+        this.searchService.submitSearch()
+    }
+
+    // Search books method
+    private searchBooks(currentSearch: CurrentSearch): Observable<SearchResult> {
+        const { searchText, pageSize, page } = currentSearch
+        const searchQuery = searchText.split(' ').join('+').toLowerCase()
+
+        return this.http.get<SearchResult>(
+            `https://openlibrary.org/search.json?q=${searchQuery}&page=${page}&limit=${pageSize}`
+        )
+    }
+
+    // Safe method to handle author names
+    safeAuthorJoin(authors: string[] | null | undefined): string {
+        return authors && authors.length ? authors.join(', ') : 'Unknown author'
+    }
+
+    // Track function for ngFor
+    trackByTitle(index: number, item: any): string {
+        return item.title
+    }
 }
